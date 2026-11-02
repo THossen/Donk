@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Answer, AskEvent, DraftAction, Overview, RepoMapData, Status } from './api/types';
-import { askDonk, fetchEvidence, fetchOverview, fetchRepoMap, fetchStatus, proposeEmail } from './api/client';
+import { askDonk, fetchAction, fetchEvidence, fetchOverview, fetchRepoMap, fetchStatus, proposeEmail } from './api/client';
 import { filesFromEvents } from './utils/evidence';
 import { repoName } from './utils/repo';
 import Timeline from './components/dashboard/Timeline';
@@ -9,6 +9,7 @@ import Graph from './components/dashboard/Graph';
 import EmailCard from './components/dashboard/EmailCard';
 import AskBox from './components/dashboard/AskBox';
 import EmailPrompt from './components/dashboard/EmailPrompt';
+import History from './components/dashboard/History';
 import AnswerSkeleton from './components/dashboard/AnswerSkeleton';
 import OverviewCard from './components/dashboard/OverviewCard';
 import Inspector from './components/evidence/Inspector';
@@ -41,6 +42,7 @@ export default function App() {
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [activityKey, setActivityKey] = useState(0);
+  const [historyKey, setHistoryKey] = useState(0);
   const [page, setPage] = useState<Page>('dashboard');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const draftBoxRef = useRef<HTMLDivElement>(null);
@@ -118,6 +120,7 @@ export default function App() {
       setAskError(e instanceof Error ? e.message : 'request failed');
     } finally {
       setAsking(false);
+      setHistoryKey((k) => k + 1);
     }
   }
 
@@ -129,6 +132,14 @@ export default function App() {
     } catch (e) {
       setAskError(e instanceof Error ? e.message : 'evidence failed');
     }
+  }
+
+  async function resumeDraft(id: string) {
+    const d = await fetchAction(id);
+    if (d.status !== 'pending') throw new Error(`Draft is ${d.status}, cannot resume`);
+    setDraft(d);
+    setDraftFor(null);
+    setPage('dashboard');
   }
 
   async function startDraft(contributor: string, suggested: boolean) {
@@ -181,6 +192,13 @@ export default function App() {
                 onOpenPalette={() => setPaletteOpen(true)}
               />
             </div>
+            {draft && !answer && (
+              <div className="mt-4">
+                <div className="mb-1 text-xs text-slate-500">Resumed draft from Activity</div>
+                <EmailCard key={draft.id} draft={draft} onDone={() => setActivityKey((k) => k + 1)} onCancel={() => setDraft(null)} />
+              </div>
+            )}
+            <History refreshKey={historyKey} onRerun={(q) => { setQuestion(q); runAsk(q); }} />
             {overview && (
               <div className="mt-4">
                 <OverviewCard
@@ -225,7 +243,7 @@ export default function App() {
             )}
 
             {draft && (
-              <EmailCard draft={draft} onDone={() => setActivityKey((k) => k + 1)} onCancel={() => setDraft(null)} />
+              <EmailCard key={draft.id} draft={draft} onDone={() => setActivityKey((k) => k + 1)} onCancel={() => setDraft(null)} />
             )}
 
             <Graph answer={answer} liveFiles={liveFiles} onEvidence={openEvidence} />
@@ -238,10 +256,10 @@ export default function App() {
             <PageHeader
               eyebrow="Workspace"
               title="Activity"
-              description="Email send history — every draft prepared, sent, or saved to the outbox."
+              description="Drafts, sends, and delivery history — resume or discard pending drafts."
             />
             <div className="mt-4">
-              <Activity refreshKey={activityKey} />
+              <Activity refreshKey={activityKey} onResume={resumeDraft} />
             </div>
           </div>
         ) : (

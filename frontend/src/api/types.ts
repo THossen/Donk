@@ -119,3 +119,10 @@ export interface SendActionInput {
   edited_subject?: string;
   edited_body?: string;
 }
+
+export interface HistoryItem {
+  id: number;
+  question: string;
+  repo: string;
+  created_at: number;
+}

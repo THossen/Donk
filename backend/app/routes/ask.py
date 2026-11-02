@@ -27,10 +27,29 @@ def ask(body: AskBody):
         raise HTTPException(status_code=400, detail="question is required")
     if len(question) > 2000:
         raise HTTPException(status_code=400, detail="question too long")
+    ctx.store.record_question(question, ctx.settings.repo_path)
     return StreamingResponse(
         (_sse(e) for e in _ask_event_stream(question)),
         media_type="text/event-stream",
     )
+
+
+@router.get("/api/history")
+def get_history(limit: int = 20):
+    limit = max(1, min(limit, 100))
+    return {"questions": ctx.store.list_questions(limit)}
+
+
+@router.delete("/api/history/{qid}")
+def delete_history_item(qid: int):
+    if not ctx.store.delete_question(qid):
+        raise HTTPException(status_code=404, detail="unknown question")
+    return {"deleted": qid}
+
+
+@router.delete("/api/history")
+def clear_history():
+    return {"deleted": ctx.store.clear_questions()}
 
 
 @router.get("/api/health/model")

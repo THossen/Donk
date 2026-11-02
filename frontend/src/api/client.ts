@@ -1,4 +1,4 @@
-import type { AskEvent, DraftAction, Overview, ProposeEmailInput, RepoList, RepoMapData, SendActionInput, Status } from './types';
+import type { AskEvent, DraftAction, HistoryItem, Overview, ProposeEmailInput, RepoList, RepoMapData, SendActionInput, Status } from './types';
 
 export async function fetchStatus(): Promise<Status> {
   const r = await fetch('/api/status');
@@ -96,4 +96,32 @@ export async function fetchActivity(): Promise<{ actions: Record<string, unknown
   const r = await fetch('/api/activity');
   if (!r.ok) throw new Error('activity failed');
   return r.json();
+}
+
+export async function fetchAction(id: string): Promise<DraftAction> {
+  const r = await fetch(`/api/actions/${id}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function discardAction(id: string): Promise<Record<string, unknown>> {
+  const r = await fetch(`/api/actions/${id}/discard`, { method: 'POST' });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function fetchHistory(): Promise<{ questions: HistoryItem[] }> {
+  const r = await fetch('/api/history');
+  if (!r.ok) throw new Error('history failed');
+  return r.json();
+}
+
+export async function deleteHistoryItem(id: number): Promise<void> {
+  const r = await fetch(`/api/history/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function clearHistory(): Promise<void> {
+  const r = await fetch('/api/history', { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
 }

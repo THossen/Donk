@@ -14,6 +14,7 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import context as app_context
+from app.routes import ask as ask_routes
 from app.routes import email as email_routes
 from app.routes import repos as repos_routes
 from app.services import investigate as investigate_svc
@@ -252,3 +253,82 @@ def test_propose_send_duplicate(env, tmp_path):
 
     actions = email_routes.activity()["actions"]
     assert any(a["id"] == draft["id"] and a["status"] == "outbox_saved" for a in actions)
+
+
+def _propose_beth():
+    return email_routes.propose_email(
+        email_routes.ProposeBody(
+            contributor="Beth", question="How does login work?",
+            scope="auth", evidence_ids=[], suggested=False,
+        )
+    )
+
+
+def test_get_action_resume_payload(env):
+    draft = _propose_beth()
+    body = email_routes.get_action(draft["id"])
+    assert body["subject"] == draft["subject"]
+    assert body["body"] == draft["body"]
+    assert body["idempotency_key"] == draft["idempotency_key"]
+    assert body["demo_mode"] is True
+    assert "Beth" in body["delivery_notice"]
+    with pytest.raises(HTTPException) as e:
+        email_routes.get_action("nope")
+    assert e.value.status_code == 404
+
+
+def test_discard_route_and_activity_label(env):
+    draft = _propose_beth()
+    out = email_routes.discard_action(draft["id"])
+    assert out["status"] == "discarded"
+    assert out["human_status"] == "Discarded"
+    row = next(
+        a for a in email_routes.activity()["actions"] if a["id"] == draft["id"]
+    )
+    assert row["human_status"] == "Discarded"
+    # Discarding twice, or sending a discarded draft, is rejected.
+    with pytest.raises(HTTPException) as e:
+        email_routes.discard_action(draft["id"])
+    assert e.value.status_code == 409
+    with pytest.raises(HTTPException) as e:
+        email_routes.discard_action("nope")
+    assert e.value.status_code == 404
+    with pytest.raises(HTTPException) as e:
+        email_routes.send_action(
+            draft["id"],
+            email_routes.SendBody(confirmed=True, idempotency_key=draft["idempotency_key"]),
+        )
+    assert e.value.status_code == 409
+
+
+def test_pending_activity_label(env):
+    draft = _propose_beth()
+    row = next(
+        a for a in email_routes.activity()["actions"] if a["id"] == draft["id"]
+    )
+    assert row["human_status"] == "Pending review — resume or discard"
+
+
+def test_ask_records_history(env):
+    # Recording happens eagerly when /api/ask is hit; the stream itself
+    # is never consumed here (sandbox blocks the sockets that needs).
+    ask_routes.ask(ask_routes.AskBody(question="who wrote login?"))
+    qs = ask_routes.get_history()["questions"]
+    assert len(qs) == 1
+    assert qs[0]["question"] == "who wrote login?"
+    assert qs[0]["repo"] == env.repo_path
+
+
+def test_history_list_delete_clear(env):
+    app_context.store.record_question("first?", "r")
+    app_context.store.record_question("second?", "r")
+    qs = ask_routes.get_history()["questions"]
+    assert [q["question"] for q in qs] == ["second?", "first?"]
+    assert ask_routes.get_history(limit=1)["questions"][0]["question"] == "second?"
+    assert ask_routes.delete_history_item(qs[0]["id"]) == {"deleted": qs[0]["id"]}
+    assert [q["question"] for q in ask_routes.get_history()["questions"]] == ["first?"]
+    with pytest.raises(HTTPException) as e:
+        ask_routes.delete_history_item(999999)
+    assert e.value.status_code == 404
+    assert ask_routes.clear_history() == {"deleted": 1}
+    assert ask_routes.get_history()["questions"] == []

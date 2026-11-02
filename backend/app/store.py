@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS actions (
   created_at REAL NOT NULL,
   sent_at REAL
 );
+CREATE TABLE IF NOT EXISTS questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  question TEXT NOT NULL,
+  repo TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
 """
 
 
@@ -29,7 +35,7 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as conn:
-            conn.execute(SCHEMA)
+            conn.executescript(SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -103,6 +109,43 @@ class Store:
                 (limit,),
             ).fetchall()
         return [_row_to_dict(r) for r in rows]
+
+    def record_question(self, question: str, repo: str) -> dict:
+        now = time.time()
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO questions (question, repo, created_at)"
+                " VALUES (?, ?, ?)",
+                (question, repo, now),
+            )
+            qid = cur.lastrowid
+            # Bound table growth; the UI only ever shows recent questions.
+            conn.execute(
+                "DELETE FROM questions WHERE id NOT IN"
+                " (SELECT id FROM questions ORDER BY id DESC LIMIT 200)"
+            )
+            row = conn.execute(
+                "SELECT * FROM questions WHERE id = ?", (qid,)
+            ).fetchone()
+        return dict(row)
+
+    def list_questions(self, limit: int = 20) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM questions ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_question(self, qid: int) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM questions WHERE id = ?", (qid,))
+        return cur.rowcount == 1
+
+    def clear_questions(self) -> int:
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM questions")
+        return cur.rowcount
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:

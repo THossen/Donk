@@ -78,6 +78,28 @@ def test_rate_limit(tmp_path):
     assert e.value.status_code == 429
 
 
+def test_discard_pending(tmp_path):
+    s = make_settings(tmp_path)
+    store = Store(s.db_path)
+    action = email_actions.propose(s, store, "Beth", "Q?", "auth", [])
+    out = email_actions.discard(store, action["id"])
+    assert out["status"] == "discarded"
+    assert store.get(action["id"])["status"] == "discarded"
+
+
+def test_discard_rejects_sent_and_unknown(tmp_path):
+    s = make_settings(tmp_path)
+    store = Store(s.db_path)
+    action = email_actions.propose(s, store, "Beth", "Q?", "auth", [])
+    email_actions.confirmed_send(s, store, action["id"], True, action["idempotency_key"])
+    with pytest.raises(email_actions.EmailError) as e:
+        email_actions.discard(store, action["id"])
+    assert e.value.status_code == 409
+    with pytest.raises(email_actions.EmailError) as e:
+        email_actions.discard(store, "nope")
+    assert e.value.status_code == 404
+
+
 def test_smtp_failure_recorded_not_delivered(tmp_path):
     s = make_settings(tmp_path, EMAIL_MODE="smtp", SMTP_HOST="127.0.0.1", SMTP_PORT=9)
     store = Store(s.db_path)

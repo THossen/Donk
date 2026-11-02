@@ -104,6 +104,19 @@ def propose(
     )
 
 
+def discard(store: Store, action_id: str) -> dict:
+    """Drop a pending draft. Anything already sent/failed is kept for the audit trail."""
+    action = store.get(action_id)
+    if action is None:
+        raise EmailError("unknown action", 404)
+    if action["status"] != "pending":
+        raise EmailError(f"action is {action['status']}, cannot discard", 409)
+    updated = store.transition(action_id, "pending", "discarded")
+    if updated is None:
+        raise EmailError("action changed, cannot discard", 409)
+    return updated
+
+
 def _write_outbox(settings: Settings, action: dict, subject: str, body: str) -> str:
     outbox = Path(settings.outbox_dir)
     outbox.mkdir(parents=True, exist_ok=True)

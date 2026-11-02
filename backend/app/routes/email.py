@@ -82,15 +82,38 @@ def propose_email(body: ProposeBody):
         )
     except email_actions.EmailError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))
+    return _action_payload(action)
+
+
+def _action_payload(action: dict) -> dict:
+    """Draft shape the confirm card renders, for both propose and resume."""
+    contributor = action["contributor"]
     return {
         **action,
         "demo_mode": ctx.settings.demo_mode,
         "delivery_notice": (
-            f"Demo mode: delivers to your configured demo inbox instead of {body.contributor}."
+            f"Demo mode: delivers to your configured demo inbox instead of {contributor}."
             if ctx.settings.demo_mode
-            else f"Delivers to the approved roster address for {body.contributor}."
+            else f"Delivers to the approved roster address for {contributor}."
         ),
     }
+
+
+@router.get("/api/actions/{action_id}")
+def get_action(action_id: str):
+    action = ctx.store.get(action_id)
+    if action is None:
+        raise HTTPException(status_code=404, detail="unknown action")
+    return _action_payload(action)
+
+
+@router.post("/api/actions/{action_id}/discard")
+def discard_action(action_id: str):
+    try:
+        action = email_actions.discard(ctx.store, action_id)
+    except email_actions.EmailError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    return {**action, "human_status": "Discarded"}
 
 
 @router.post("/api/actions/{action_id}/send")
@@ -122,6 +145,10 @@ def activity():
             it["human_status"] = "Saved to outbox"
         elif it["status"] == "failed":
             it["human_status"] = f"Failed: {it.get('error', '')}"
+        elif it["status"] == "pending":
+            it["human_status"] = "Pending review — resume or discard"
+        elif it["status"] == "discarded":
+            it["human_status"] = "Discarded"
         else:
             it["human_status"] = it["status"]
     return {"actions": items}
