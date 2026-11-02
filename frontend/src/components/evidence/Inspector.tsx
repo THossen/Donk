@@ -1,0 +1,101 @@
+import { X } from 'lucide-react';
+import { colorFor } from '../../utils/colors';
+import { timeAgo } from '../../utils/time';
+import IconButton from '../ui/IconButton';
+
+export default function Inspector({
+  evidence,
+  onClose,
+}: {
+  evidence: Record<string, unknown> | null;
+  onClose: () => void;
+}) {
+  if (!evidence) return null;
+  const kind = evidence.kind as string;
+  return (
+    <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-ink-700 bg-ink-900 shadow-xl">
+      <div className="flex items-center justify-between border-b border-ink-700 px-4 py-3">
+        <div className="font-mono text-sm text-slate-200">{String(evidence.id)}</div>
+        <IconButton label="Close evidence" onClick={onClose} className="text-slate-400 hover:text-slate-100">
+          <X size={16} />
+        </IconButton>
+      </div>
+      <div className="donk-scroll flex-1 overflow-auto p-4">
+        {kind === 'commit' && <CommitView e={evidence} />}
+        {kind === 'snippet' && <SnippetView e={evidence} />}
+        {kind === 'blame' && <BlameView e={evidence} />}
+      </div>
+    </div>
+  );
+}
+
+function CommitView({ e }: { e: Record<string, unknown> }) {
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="font-medium text-slate-100">{String(e.subject)}</div>
+      <dl className="space-y-1 text-[13px]">
+        <Row k="sha" v={String(e.sha)} mono />
+        <Row k="author" v={String(e.author)} />
+        <Row k="date" v={timeAgo(String(e.date)) ? `${String(e.date)} · ${timeAgo(String(e.date))}` : String(e.date)} />
+      </dl>
+    </div>
+  );
+}
+
+function SnippetView({ e }: { e: Record<string, unknown> }) {
+  const lines = String(e.text ?? '').split('\n');
+  const start = Number(e.start_line ?? 1);
+  return (
+    <div>
+      <div className="mb-2 font-mono text-xs text-slate-400">
+        {String(e.path)}:{String(e.start_line)} · {String(e.total_lines)} lines total
+        {(e.truncated as boolean) && ' · truncated'}
+      </div>
+      <pre className="overflow-x-auto rounded-lg bg-ink-950 p-3 font-mono text-xs leading-relaxed">
+        {lines.map((l, i) => (
+          <div key={i} className="flex gap-3">
+            <span className="w-8 shrink-0 select-none text-right text-slate-600">{start + i}</span>
+            <span className="whitespace-pre text-slate-200">{l}</span>
+          </div>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
+function BlameView({ e }: { e: Record<string, unknown> }) {
+  const lines = (e.lines as { sha: string; author: string; text: string }[]) ?? [];
+  return (
+    <div>
+      <div className="mb-2 font-mono text-xs text-slate-400">{String(e.path)} · blame</div>
+      <pre className="overflow-x-auto rounded-lg bg-ink-950 p-3 font-mono text-xs leading-relaxed">
+        {lines.map((l, i) => (
+          <div key={i} className="flex gap-2">
+            <span className="w-24 shrink-0 truncate" style={{ color: colorFor(l.author) }} title={`${l.author} · ${l.sha.slice(0, 12)}`}>
+              {l.author}
+            </span>
+            <span className="whitespace-pre text-slate-200">{l.text}</span>
+          </div>
+        ))}
+      </pre>
+      {e.rollup ? (
+        <div className="mt-3 text-xs text-slate-400">
+          Surviving lines:{' '}
+          {Object.entries(e.rollup as Record<string, number>)
+            .sort((a, b) => b[1] - a[1])
+            .map(([n, c]) => `${n} ${c}`)
+            .join(' · ')}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
+  return (
+    <div className="flex gap-2">
+      <dt className="w-14 shrink-0 text-slate-500">{k}</dt>
+      <dd className={`break-all text-slate-200 ${mono ? 'font-mono text-xs' : ''}`}>{v}</dd>
+    </div>
+  );
+}

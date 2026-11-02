@@ -1,0 +1,6 @@
+{
+  "members": [
+    {"name": "Priya", "aliases": ["priya"], "email": "priya@example.com"},
+    {"name": "Marcus", "aliases": ["marcus"], "email": "marcus@example.com"}
+  ]
+}

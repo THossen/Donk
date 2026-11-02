@@ -1,0 +1,49 @@
+# Donk ignores -- never commit secrets, demo data, or local state.
+
+# Secrets: every .env* file is ignored EXCEPT the placeholder template.
+.env*
+!.env.example
+team.json
+!team.json.example
+*.pem
+*.key
+
+# Analyzed repos, outbox drafts, and local databases (may hold real emails).
+demo-data/
+outbox/
+*.db*
+*.sqlite*
+
+# Caches, builds, and virtualenvs.
+.cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+backend/.pytest_cache/
+pytest-of-*/
+pip-build-tracker-*/
+pip-ephem-wheel-cache-*/
+pip-install-*/
+.coverage
+htmlcov/
+.venv/
+node_modules/
+dist/
+build/
+frontend/dist/
+frontend/.npm-cache/
+.npm-cache/
+*.tsbuildinfo
+*.log
+
+# VCS / editor / OS metadata.
+.sl/
+.hg/
+.eden/
+.agents/
+.muse/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
