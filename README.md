@@ -11,7 +11,8 @@ key Donk runs fully local deterministic analysis over real Git history.
 
 - **Ask in plain English** — "who built the auth flow?" streams a live
   investigation timeline and lands on contributor cards: main contributor,
-  who wrote it first, who touched it last.
+  who wrote it first, who touched it last. Follow-ups ("why them?", "only
+  the backend") continue the same investigation with its scope and evidence.
 - **Evidence, not vibes** — every claim links to the commit, blame lines, or
   snippet behind it, with an inspector to read the code in context.
 - **Repo map** — an expandable tree of the repository that zooms to the files
@@ -19,7 +20,8 @@ key Donk runs fully local deterministic analysis over real Git history.
 - **Ask a contributor** — prepare an email draft (model-written or template),
   edit it, and confirm the send. Pending drafts can be resumed or discarded
   later from Activity.
-- **Ask history** — recent questions with one-click re-run.
+- **Past investigations** — every investigation is saved with its answers.
+  Reopen one to restore the full results and keep asking where you left off.
 - **Multiple repos** — detect and switch repositories without restarting.
 - **Command palette** (`Cmd/Ctrl-K`) — ask, navigate, and switch repos from
   the keyboard.
@@ -30,7 +32,13 @@ key Donk runs fully local deterministic analysis over real Git history.
 
 Prerequisites: Python 3.11+, Node 18+, Git CLI.
 
+### Windows (PowerShell)
+
 ```powershell
+# 0. Clone Donk
+git clone https://github.com/THossen/Donk.git
+cd Donk
+
 # 1. Backend environment (project-local .venv)
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r backend/requirements.txt
@@ -53,11 +61,37 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 in a browser.
+### macOS / Linux (bash or zsh)
 
-On macOS/Linux use `python3 -m venv .venv`,
-`source .venv/bin/activate`, `cp .env.example .env`, and `python -m ...`
-for the backend commands — everything else is the same.
+```bash
+# 0. Clone Donk
+git clone https://github.com/THossen/Donk.git
+cd Donk
+
+# 1. Backend environment (project-local .venv)
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r backend/requirements.txt
+
+# 2. Private configuration (never commit .env)
+cp .env.example .env
+# Edit .env: MODEL_API_KEY enables Muse investigation (optional);
+# DEMO_EMAIL_REDIRECT is your inbox for the final send.
+# For real SMTP sending also set EMAIL_MODE=smtp plus SMTP_* (see below).
+
+# 3. Demo repository (already have one? point REPO_PATH at it and skip)
+git clone --depth 200 https://github.com/THossen/BiddersBlock-v2.git demo-data/BiddersBlock-v2
+
+# 4. Start the backend (from the project root, .venv activated)
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+
+# 5. Start the frontend (second terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 in a browser.
 
 Without `MODEL_API_KEY`, Donk runs deterministic local analysis (real Git
 evidence, template answers). With the key, the backend performs tool-using
@@ -93,10 +127,16 @@ and are disclosed in the UI wherever truncation applies.
   against the snapshot (reference validation — it does not prove every AI
   interpretation). `actions.py` + `store.py` implement propose/confirm-send
   with SQLite, idempotency, rate limits, and outbox/SMTP delivery.
+  Contributor cards and graphs always describe the files actually
+  investigated — never a re-derived repository-wide rollup. Completed
+  investigations persist as threads in SQLite, so follow-ups reuse prior
+  scope, findings, and evidence (per repository; switching repos starts
+  a fresh thread).
 - **Frontend** (`frontend/src/`): React + Vite + Tailwind. Ask composer,
-  live tool-progress timeline, contributor cards, clickable evidence chips +
-  inspector, contributor→code graph, editable email confirmation card,
-  activity feed, ask history, and a command palette.
+  conversational investigation view, contributor cards, clickable evidence
+  chips + slide-over inspector, repository map and contributor graph behind
+  tabs, editable email confirmation card, activity feed, past
+  investigations, and a command palette.
 - **Performance**: disk cache keyed by (args + HEAD) with 24h TTL. The whole
   repo is never sent to the model.
 - **Analyzed repos are data**: read-only Git access; nothing in them is
@@ -140,11 +180,18 @@ emails are sent automatically — you trigger the final send in the UI.
 .\.venv\Scripts\python -m pytest backend/tests -q
 ```
 
+On macOS/Linux, with the venv from quick start activated:
+
+```bash
+python -m pytest backend/tests -q
+```
+
 Small fast Git fixtures cover: original vs main vs recent attribution,
 ambiguity (multiple mains), unknown questions, invalid evidence IDs,
 propose-never-sends, confirm/duplicate-send, discard, resume payload,
-ask-history record/list/delete, demo redirect, rate limit, and SMTP-failure
-recording. No network, no auto-sends.
+ask-history record/list/delete, investigation threads (create, continue,
+repo-mismatch, investigated-file scope preservation), demo redirect, rate
+limit, and SMTP-failure recording. No network, no auto-sends.
 
 ## Project structure
 
@@ -152,12 +199,12 @@ recording. No network, no auto-sends.
 ├── backend/
 │   ├── app/
 │   │   ├── main.py          # FastAPI app + router wiring
-│   │   ├── routes/          # ask, email/activity, repos endpoints
+│   │   ├── routes/          # ask, email/activity, investigations, repos endpoints
 │   │   ├── services/        # investigation orchestration
 │   │   ├── llm_service.py   # model tool loop + deterministic fallback
 │   │   ├── gittools.py      # bounded Git access at pinned HEAD
 │   │   ├── actions.py       # propose / confirmed-send / discard
-│   │   ├── store.py         # SQLite: actions + ask history
+│   │   ├── store.py         # SQLite: actions, investigations, question history
 │   │   └── ...              # config, evidence, verify
 │   └── tests/               # pytest suite (fast Git fixtures, no network)
 ├── frontend/
@@ -193,6 +240,9 @@ recording. No network, no auto-sends.
   generated text — review before sending.
 - `.repos/` and `node_modules/` mirrors are excluded from content search as
   vendored noise.
+- Follow-ups carry the last few turns of context, per repository — switching
+  repos starts a fresh investigation. In local (no-key) mode, a follow-up
+  reuses the previous scope rather than interpreting new intent.
 - Donk is not for grading, employment decisions, or measuring individual effort.
 
 ## Docs

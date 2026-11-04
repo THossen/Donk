@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .routes import ask as ask_routes
 from .routes import email as email_routes
+from .routes import investigations as investigations_routes
 from .routes import repos as repos_routes
 
 log = logging.getLogger("donk")
@@ -20,4 +21,5 @@ app.add_middleware(
 )
 app.include_router(ask_routes.router)
 app.include_router(email_routes.router)
+app.include_router(investigations_routes.router)
 app.include_router(repos_routes.router)

@@ -44,6 +44,7 @@ export interface Answer {
   most_recent_contributor?: string | null;
   scope?: string;
   investigated_files?: string[];
+  continued?: boolean;
   verification?: { checked: number; problems: string[]; verified: boolean };
   repaired?: boolean;
 }
@@ -52,7 +53,7 @@ export type AskEvent =
   | { type: 'stage'; phase: string; detail: string }
   | { type: 'tool'; name: string; summary: string }
   | { type: 'result'; name: string; evidence_ids: string[]; error: string | null }
-  | { type: 'answer'; answer: Answer }
+  | { type: 'answer'; answer: Answer; thread_id?: string | null }
   | { type: 'error'; detail: string }
   | { type: 'done' };
 
@@ -128,4 +129,28 @@ export interface HistoryItem {
   question: string;
   repo: string;
   created_at: number;
+}
+
+export interface InvestigationSummary {
+  id: string;
+  title: string;
+  repo: string;
+  created_at: number;
+  updated_at: number;
+  turn_count: number;
+}
+
+export interface InvestigationTurn {
+  question: string;
+  answer: Answer;
+  created_at: number;
+}
+
+export interface InvestigationDetail {
+  id: string;
+  title: string;
+  repo: string;
+  created_at: number;
+  updated_at: number;
+  turns: InvestigationTurn[];
 }

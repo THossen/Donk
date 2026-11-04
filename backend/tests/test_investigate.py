@@ -131,6 +131,43 @@ def test_enrich_keeps_good_suggested_question(mini_repo):
     assert answer["suggested_question"] == "Could you explain the validation logic?"
 
 
+def test_model_loop_includes_prior_turns(mini_repo, monkeypatch):
+    seen = []
+
+    def fake_post(self, payload):
+        seen.append(payload)
+        return {"output": [
+            {"type": "message", "id": "m_1", "role": "assistant",
+             "status": "completed",
+             "content": [{"type": "output_text",
+                          "text": ('{"headline": "Because Beth.",'
+                                   ' "findings": [],'
+                                   ' "contributor_names": ["Beth"],'
+                                   ' "evidence_ids": [],'
+                                   ' "suggested_question": ""}')} ]},
+        ]}
+
+    monkeypatch.setattr(ModelService, "_post", fake_post)
+    svc = ModelService(Settings(MODEL_API_KEY="test-key", REPO_PATH="."))
+    prior = [{
+        "question": "Who worked on login?",
+        "answer": {
+            "headline": "Beth.", "findings": ["f"],
+            "contributor_names": ["Beth"], "evidence_ids": [],
+            "scope": "auth", "suggested_question": "",
+        },
+    }]
+    out = svc.investigate(GitRepo(mini_repo), "Why them?", prior_turns=prior)
+    first_input = seen[0]["input"]
+    users = [
+        str(i.get("content", "")) for i in first_input
+        if isinstance(i, dict) and i.get("role") == "user"
+    ]
+    assert "Who worked on login?" in users
+    assert "Why them?" in users
+    assert out["answer"]["contributor_names"] == ["Beth"]
+
+
 def test_model_loop_tracks_investigated_files(mini_repo, monkeypatch):
     turns = [
         {"output": [

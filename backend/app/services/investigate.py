@@ -36,17 +36,24 @@ def _derive_scope(files: list[str]) -> str:
     return "/".join(common)
 
 
-def _enrich_answer(repo: GitRepo, answer: dict) -> dict:
+def _enrich_answer(
+    repo: GitRepo, answer: dict, prior_files: list[str] | None = None
+) -> dict:
     """Attach full contributor cards (files/commits/dates) for named contributors.
 
     Cards always describe the files actually investigated — never a re-derived
-    repository-wide rollup, and never strangers the answer didn't name.
+    repository-wide rollup, and never strangers the answer didn't name. When a
+    follow-up turn investigated nothing new, the previous turn's files carry
+    over so its contributor cards stay attached.
     """
     names = answer.get("contributor_names", [])[:4]
     scope = answer.get("scope", "")
     rollup = answer.get("rollup")
     if rollup is None and names:
         investigated = [f for f in answer.get("investigated_files", []) if f]
+        if not investigated and prior_files:
+            investigated = [f for f in prior_files if f]
+            answer["investigated_files"] = investigated
         if investigated:
             analyzed = investigated[:_ENRICH_MAX_FILES]
             scope = _derive_scope(analyzed)
@@ -86,13 +93,41 @@ def _enrich_answer(repo: GitRepo, answer: dict) -> dict:
     return answer
 
 
-def _ask_event_stream(question: str):
-    """Sync event generator behind /api/ask. Yields plain event dicts."""
+def _ask_event_stream(question: str, thread_id: str | None = None):
+    """Sync event generator behind /api/ask. Yields plain event dicts.
+
+    With a thread_id, earlier turns give context (scope, findings, evidence)
+    so follow-ups continue the same investigation. A thread only applies to
+    the repo it was created on; on mismatch the ask starts a new one.
+    """
     try:
         repo = ctx.get_repo()
     except HTTPException as e:
         yield {"type": "error", "detail": e.detail}
         return
+    prior_turns: list[dict] = []
+    prior_files: list[str] = []
+    prior_ctx: dict | None = None
+    if thread_id:
+        thread = ctx.store.get_investigation(thread_id)
+        if thread and thread.get("repo") == ctx.settings.repo_path and thread.get("turns"):
+            prior_turns = thread["turns"]
+            last_answer = prior_turns[-1].get("answer", {})
+            prior_files = list(last_answer.get("investigated_files") or [])
+            if not prior_files:
+                prior_files = [
+                    f.get("path", "")
+                    for f in last_answer.get("files", [])
+                    if isinstance(f, dict)
+                ]
+            prior_ctx = {
+                "scope": last_answer.get("scope", ""),
+                "contributor_names": last_answer.get("contributor_names", []),
+                "evidence_ids": last_answer.get("evidence_ids", []),
+                "investigated_files": prior_files,
+            }
+        else:
+            thread_id = None
     yield {"type": "stage", "phase": "starting", "detail": question[:120]}
     if ctx.settings.model_configured:
         yield {"type": "stage", "phase": "asking_model", "detail": ctx.settings.model_id}
@@ -104,9 +139,13 @@ def _ask_event_stream(question: str):
     def worker():
         try:
             if ctx.settings.model_configured:
-                result = ModelService(ctx.settings).investigate(repo, question, on_event=q.put)
+                result = ModelService(ctx.settings).investigate(
+                    repo, question, on_event=q.put, prior_turns=prior_turns
+                )
             else:
-                result = fallback_investigate(repo, question, ctx.settings, on_event=q.put)
+                result = fallback_investigate(
+                    repo, question, ctx.settings, on_event=q.put, prior=prior_ctx
+                )
             q.put(("__result__", result))
         except Exception as e:  # noqa: BLE001 - reported via SSE, key redacted below
             q.put(("__error__", e))
@@ -132,6 +171,12 @@ def _ask_event_stream(question: str):
         if ctx.settings.model_configured:
             known = set(result["known_ids"])
             texts = [json.dumps(t) for t in result["tool_log"]]
+            # Prior turns' citations stay valid: they were tool-produced
+            # against the same thread, so follow-ups may re-cite them.
+            for t in prior_turns[-3:]:
+                pa = t.get("answer", {})
+                known.update(pa.get("evidence_ids", []))
+                texts.append(json.dumps(pa)[:4000])
             yield {"type": "stage", "phase": "verifying", "detail": "checking evidence references"}
             verdict = verify_answer(repo, answer, known, texts)
             answer["verification"] = verdict
@@ -153,8 +198,15 @@ def _ask_event_stream(question: str):
                 "problems": [],
                 "verified": True,
             }
-        answer = _enrich_answer(repo, answer)
-        yield {"type": "answer", "answer": answer}
+        answer = _enrich_answer(repo, answer, prior_files=prior_files)
+        try:
+            if not thread_id:
+                thread_id = ctx.store.create_investigation(question, ctx.settings.repo_path)
+            ctx.store.append_turn(thread_id, question, answer)
+        except Exception:
+            log.exception("failed to persist investigation turn")
+            thread_id = None
+        yield {"type": "answer", "answer": answer, "thread_id": thread_id}
         yield {"type": "done"}
     except Exception as e:
         detail = str(e)[:300]

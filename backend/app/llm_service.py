@@ -24,6 +24,7 @@ Rules:
 - Say "main contributor" — never assert official ownership or responsibility.
 - If evidence is ambiguous, name multiple contributors and explain why.
 - If evidence is insufficient, say so plainly and suggest what would resolve it.
+- The user may ask follow-ups in the same conversation: earlier turns give the prior scope, findings, and evidence. Reuse them and re-investigate only what is new; "why them?" or "only the backend" refers to the previous investigation.
 - Keep the final answer short: a one-sentence headline plus up to three findings.
 - "suggested_question" is a ready-to-send question FOR the contributor about their code (e.g. "Could you walk me through ...?"). Never address the user, never offer follow-ups ("do you want...", "would you like...", "should I..."), never narrate the investigation.
 - Your final message must be a single JSON object: {"headline": str, "findings": [str,...], "contributor_names": [str,...], "evidence_ids": [str,...], "suggested_question": str}.
@@ -199,15 +200,28 @@ class ModelService:
         repo: GitRepo,
         question: str,
         on_event: Callable[[dict], None] | None = None,
+        prior_turns: list[dict] | None = None,
     ) -> dict:
         """Tool-using investigation. Returns structured answer + raw tool log."""
         if not self.settings.model_configured:
             raise RuntimeError("model not configured")
         emit = on_event or (lambda e: None)
-        convo: list[dict] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": question[:2000]},
-        ]
+        convo: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # Prior turns as compact Q/A summaries: scope, findings, names, and
+        # evidence ids carry over so follow-ups build on the same investigation.
+        for turn in (prior_turns or [])[-3:]:
+            pa = turn.get("answer", {}) if isinstance(turn, dict) else {}
+            summary = {
+                "headline": pa.get("headline", ""),
+                "findings": pa.get("findings", []),
+                "contributor_names": pa.get("contributor_names", []),
+                "evidence_ids": pa.get("evidence_ids", []),
+                "scope": pa.get("scope", ""),
+                "suggested_question": pa.get("suggested_question", ""),
+            }
+            convo.append({"role": "user", "content": str(turn.get("question", ""))[:2000]})
+            convo.append({"role": "assistant", "content": json.dumps(summary)})
+        convo.append({"role": "user", "content": question[:2000]})
         tool_log: list[dict] = []
         known_ids: set[str] = set()
         file_mentions: dict[str, int] = {}
@@ -375,8 +389,14 @@ def fallback_investigate(
     question: str,
     settings: Settings,
     on_event: Callable[[dict], None] | None = None,
+    prior: dict | None = None,
 ) -> dict:
-    """Deterministic keyword investigation used when no model key is set."""
+    """Deterministic keyword investigation used when no model key is set.
+
+    `prior` carries the previous thread turn; when a follow-up matches no new
+    files, the investigation continues in the previous scope instead of
+    failing with no context.
+    """
     emit = on_event or (lambda e: None)
     words = [
         w.strip("?.,!:'\"").lower()
@@ -422,6 +442,36 @@ def fallback_investigate(
         emit({"type": "result", "name": "search_files", "evidence_ids": [h["evidence_id"] for h in hits[-12:]], "error": None})
         if len(hits) >= settings.search_max_results:
             break
+    if not hits and prior and prior.get("scope"):
+        # Follow-up with no new file matches: continue in the prior scope.
+        scope = prior["scope"]
+        emit({"type": "stage", "phase": "checking_history", "detail": f"continuing in {scope}"})
+        emit({"type": "tool", "name": "explain_authorship", "summary": f"authorship {scope}"})
+        rollup = ev.explain_authorship(repo, scope)
+        emit({"type": "result", "name": "explain_authorship",
+              "evidence_ids": list(prior.get("evidence_ids", []))[:12], "error": None})
+        if not rollup.get("insufficient") and rollup["contributors"]:
+            mains = rollup["main_contributors"] or [rollup["contributors"][0]["name"]]
+            top = rollup["contributors"][0]
+            return {
+                "answer": {
+                    "headline": f"Continuing in {scope}: main contributor is {mains[0]}.",
+                    "findings": [
+                        f"Same scope as the previous question: {scope}.",
+                        f"Top match: {top['name']} ({top['surviving_lines']} surviving lines, {top['commits']} commits in scope).",
+                    ],
+                    "contributor_names": [c["name"] for c in rollup["contributors"][:4]],
+                    "evidence_ids": list(prior.get("evidence_ids", []))[:12],
+                    "suggested_question": f"Could you walk me through the {scope} implementation and any edge cases?",
+                    "model_used": False,
+                    "rollup": rollup,
+                    "scope": scope,
+                    "investigated_files": list(prior.get("investigated_files", [])),
+                    "continued": True,
+                },
+                "tool_log": [],
+                "known_ids": list(prior.get("evidence_ids", [])),
+            }
     if not hits:
         return {
             "answer": {

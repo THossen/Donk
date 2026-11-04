@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import context as app_context
 from app.routes import ask as ask_routes
 from app.routes import email as email_routes
+from app.routes import investigations as inv_routes
 from app.routes import repos as repos_routes
 from app.services import investigate as investigate_svc
 from app.config import Settings
@@ -317,6 +318,55 @@ def test_ask_records_history(env):
     assert len(qs) == 1
     assert qs[0]["question"] == "who wrote login?"
     assert qs[0]["repo"] == env.repo_path
+
+
+def test_investigations_routes(env):
+    inv_id = app_context.store.create_investigation(
+        "Who built login?", app_context.settings.repo_path
+    )
+    app_context.store.append_turn(inv_id, "Who built login?", {"headline": "Beth."})
+    row = next(
+        i for i in inv_routes.list_investigations()["investigations"]
+        if i["id"] == inv_id
+    )
+    assert row["turn_count"] == 1 and row["title"] == "Who built login?"
+    got = inv_routes.get_investigation(inv_id)
+    assert got["turns"][0]["answer"]["headline"] == "Beth."
+    assert inv_routes.delete_investigation(inv_id) == {"deleted": inv_id}
+    with pytest.raises(HTTPException) as e:
+        inv_routes.get_investigation(inv_id)
+    assert e.value.status_code == 404
+
+
+def test_stream_creates_and_continues_thread(env):
+    e1 = list(investigate_svc._ask_event_stream("Who worked on login?"))
+    ans1 = next(e for e in e1 if e["type"] == "answer")
+    tid = ans1["thread_id"]
+    assert tid
+    inv = app_context.store.get_investigation(tid)
+    assert len(inv["turns"]) == 1
+    assert inv["turns"][0]["question"] == "Who worked on login?"
+
+    e2 = list(investigate_svc._ask_event_stream("And who else touched it?", tid))
+    ans2 = next(e for e in e2 if e["type"] == "answer")
+    assert ans2["thread_id"] == tid
+    assert len(app_context.store.get_investigation(tid)["turns"]) == 2
+    # The fallback followed up in the prior scope instead of failing cold.
+    assert ans2["answer"]["scope"] == "auth"
+    assert ans2["answer"].get("continued") is True
+    assert "Beth" in ans2["answer"]["contributor_names"]
+
+
+def test_stream_thread_repo_mismatch_starts_new(env):
+    ghost = app_context.store.create_investigation("t", "/some/other/repo")
+    app_context.store.append_turn(ghost, "q", {
+        "headline": "h", "scope": "auth", "evidence_ids": [],
+        "contributor_names": [], "investigated_files": [],
+    })
+    e = list(investigate_svc._ask_event_stream("Who worked on login?", ghost))
+    ans = next(x for x in e if x["type"] == "answer")
+    assert ans["thread_id"] != ghost
+    assert len(app_context.store.get_investigation(ghost)["turns"]) == 1
 
 
 def test_history_list_delete_clear(env):

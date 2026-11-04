@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Answer, AskEvent, DraftAction, Overview, RepoMapData, Status } from './api/types';
-import { askDonk, fetchAction, fetchEvidence, fetchOverview, fetchRepoMap, fetchStatus, proposeEmail } from './api/client';
+import { askDonk, fetchAction, fetchEvidence, fetchInvestigation, fetchOverview, fetchRepoMap, fetchStatus, proposeEmail } from './api/client';
 import { filesFromEvents } from './utils/evidence';
 import { repoName } from './utils/repo';
 import Timeline from './components/dashboard/Timeline';
@@ -8,7 +8,7 @@ import Results from './components/dashboard/Results';
 import EmailCard from './components/dashboard/EmailCard';
 import AskBox from './components/dashboard/AskBox';
 import EmailPrompt from './components/dashboard/EmailPrompt';
-import History from './components/dashboard/History';
+import Investigations from './components/dashboard/Investigations';
 import AnswerSkeleton from './components/dashboard/AnswerSkeleton';
 import RepoStrip from './components/dashboard/RepoStrip';
 import ExploreTabs from './components/dashboard/ExploreTabs';
@@ -44,7 +44,9 @@ export default function App() {
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [activityKey, setActivityKey] = useState(0);
-  const [historyKey, setHistoryKey] = useState(0);
+  const [invKey, setInvKey] = useState(0);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [threadTurns, setThreadTurns] = useState<{ question: string; answer: Answer }[]>([]);
   const [page, setPage] = useState<Page>('dashboard');
   const [stopped, setStopped] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -62,6 +64,9 @@ export default function App() {
     setDraft(null);
     setDraftFor(null);
     setAskError(null);
+    setThreadId(null);
+    setThreadTurns([]);
+    setStopped(false);
   }
 
   useEffect(() => {
@@ -80,11 +85,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  async function runAsk(q: string) {
+  async function runAsk(q: string, fresh = false) {
     const query = q.trim();
     if (!query || asking) return;
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const continuing = !fresh && threadId !== null;
     setAsking(true);
     setAskError(null);
     setStopped(false);
@@ -95,9 +101,14 @@ export default function App() {
     setDraftFor(null);
     const collected: AskEvent[] = [];
     try {
-      for await (const e of askDonk(query, ctrl.signal)) {
-        if (e.type === 'answer') setAnswer(e.answer);
-        else if (e.type === 'error') setAskError(e.detail);
+      for await (const e of askDonk(query, ctrl.signal, continuing ? threadId : undefined)) {
+        if (e.type === 'answer') {
+          setAnswer(e.answer);
+          if (e.thread_id) setThreadId(e.thread_id);
+          const turn = { question: query, answer: e.answer };
+          if (continuing) setThreadTurns((prev) => [...prev, turn]);
+          else setThreadTurns([turn]);
+        } else if (e.type === 'error') setAskError(e.detail);
         else if (e.type !== 'done') {
           collected.push(e);
           setEvents([...collected]);
@@ -112,7 +123,39 @@ export default function App() {
       }
     } finally {
       setAsking(false);
-      setHistoryKey((k) => k + 1);
+      setInvKey((k) => k + 1);
+    }
+  }
+
+  function newInvestigation() {
+    setThreadId(null);
+    setThreadTurns([]);
+    setAnswer(null);
+    setEvents([]);
+    setLiveFiles([]);
+    setAskError(null);
+    setStopped(false);
+    setDraft(null);
+    setDraftFor(null);
+    setQuestion('');
+    inputRef.current?.focus();
+  }
+
+  async function openInvestigation(id: string) {
+    try {
+      const inv = await fetchInvestigation(id);
+      const turns = inv.turns.map((t) => ({ question: t.question, answer: t.answer }));
+      setThreadId(inv.id);
+      setThreadTurns(turns);
+      setAnswer(turns.length > 0 ? turns[turns.length - 1].answer : null);
+      setEvents([]);
+      setAskError(null);
+      setStopped(false);
+      setDraft(null);
+      setDraftFor(null);
+      setPage('dashboard');
+    } catch (e) {
+      setAskError(e instanceof Error ? e.message : 'could not open investigation');
     }
   }
 
@@ -228,6 +271,18 @@ export default function App() {
                 onOpenPalette={() => setPaletteOpen(true)}
               />
             </div>
+            {threadId && threadTurns.length > 0 && (
+              <div className="mt-3 flex items-center gap-2 text-[13px]">
+                <span className="shrink-0 text-slate-500">Investigation:</span>
+                <span className="min-w-0 flex-1 truncate font-medium text-slate-900">{threadTurns[0].question}</span>
+                <span className="shrink-0 rounded-full bg-ink-800 px-2 py-0.5 text-xs text-slate-500">
+                  {threadTurns.length} turn{threadTurns.length === 1 ? '' : 's'}
+                </span>
+                <button onClick={newInvestigation} className="shrink-0 font-medium text-teal-200 hover:underline">
+                  New investigation
+                </button>
+              </div>
+            )}
             {draft && !answer && (
               <div className="mt-4">
                 <div className="mb-1 text-xs text-slate-500">Resumed draft from Activity</div>
@@ -250,6 +305,17 @@ export default function App() {
         )}
 
         {asking && !answer && <AnswerSkeleton />}
+
+        {threadTurns.length > 1 && (
+          <div className="mt-4 space-y-2">
+            {threadTurns.slice(0, -1).map((t, i) => (
+              <div key={i} className="rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-[13px]">
+                <div className="font-medium text-slate-900">{t.question}</div>
+                <div className="mt-0.5 truncate text-slate-500">{t.answer.headline}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {answer && (
           <div className="mt-4 space-y-4">
@@ -288,7 +354,14 @@ export default function App() {
                 />
               </div>
             )}
-            <History refreshKey={historyKey} onRerun={(q) => { setQuestion(q); runAsk(q); }} />
+            <Investigations
+              refreshKey={invKey}
+              activeId={threadId}
+              onOpen={openInvestigation}
+              onDeleted={(id) => {
+                if (id === null || id === threadId) newInvestigation();
+              }}
+            />
 
           </>
         ) : page === 'activity' ? (
@@ -330,7 +403,7 @@ export default function App() {
           setPaletteOpen(false);
           setPage('dashboard');
           setQuestion(q);
-          runAsk(q);
+          runAsk(q, true);
         }}
         onNavigate={setPage}
         onSwitched={refreshRepoContext}

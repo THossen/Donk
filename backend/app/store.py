@@ -27,6 +27,20 @@ CREATE TABLE IF NOT EXISTS questions (
   repo TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS investigations (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS turns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  investigation_id TEXT NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL DEFAULT '{}',
+  created_at REAL NOT NULL
+);
 """
 
 
@@ -147,6 +161,73 @@ class Store:
             cur = conn.execute("DELETE FROM questions")
         return cur.rowcount
 
+    # -- investigations (conversational threads with persisted answers) -----
+
+    def create_investigation(self, title: str, repo: str) -> str:
+        inv_id = uuid.uuid4().hex[:12]
+        now = time.time()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO investigations (id, title, repo, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (inv_id, title[:80], repo, now, now),
+            )
+        return inv_id
+
+    def append_turn(self, inv_id: str, question: str, answer: dict) -> dict:
+        now = time.time()
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO turns (investigation_id, question, answer, created_at)"
+                " VALUES (?, ?, ?, ?)",
+                (inv_id, question, json.dumps(answer), now),
+            )
+            conn.execute(
+                "UPDATE investigations SET updated_at = ? WHERE id = ?",
+                (now, inv_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM turns WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
+        return _turn_to_dict(row)
+
+    def get_investigation(self, inv_id: str) -> dict | None:
+        with self._conn() as conn:
+            inv = conn.execute(
+                "SELECT * FROM investigations WHERE id = ?", (inv_id,)
+            ).fetchone()
+            if inv is None:
+                return None
+            turn_rows = conn.execute(
+                "SELECT * FROM turns WHERE investigation_id = ? ORDER BY id ASC",
+                (inv_id,),
+            ).fetchall()
+        out = dict(inv)
+        out["turns"] = [_turn_to_dict(r) for r in turn_rows]
+        return out
+
+    def list_investigations(self, limit: int = 20) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT i.*, COUNT(t.id) AS turn_count FROM investigations i"
+                " LEFT JOIN turns t ON t.investigation_id = i.id"
+                " GROUP BY i.id ORDER BY i.updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_investigation(self, inv_id: str) -> bool:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM turns WHERE investigation_id = ?", (inv_id,))
+            cur = conn.execute("DELETE FROM investigations WHERE id = ?", (inv_id,))
+        return cur.rowcount == 1
+
+    def clear_investigations(self) -> int:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM turns")
+            cur = conn.execute("DELETE FROM investigations")
+        return cur.rowcount
+
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
@@ -154,4 +235,13 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         d["evidence_ids"] = json.loads(d.get("evidence_ids") or "[]")
     except ValueError:
         d["evidence_ids"] = []
+    return d
+
+
+def _turn_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    try:
+        d["answer"] = json.loads(d.get("answer") or "{}")
+    except ValueError:
+        d["answer"] = {}
     return d

@@ -1,4 +1,4 @@
-import type { AskEvent, DraftAction, HistoryItem, Overview, ProposeEmailInput, RepoList, RepoMapData, SendActionInput, Status } from './types';
+import type { AskEvent, DraftAction, HistoryItem, InvestigationDetail, InvestigationSummary, Overview, ProposeEmailInput, RepoList, RepoMapData, SendActionInput, Status } from './types';
 
 export async function fetchStatus(): Promise<Status> {
   const r = await fetch('/api/status');
@@ -12,11 +12,11 @@ export async function fetchOverview(): Promise<Overview> {
   return r.json();
 }
 
-export async function* askDonk(question: string, signal?: AbortSignal): AsyncGenerator<AskEvent> {
+export async function* askDonk(question: string, signal?: AbortSignal, threadId?: string | null): AsyncGenerator<AskEvent> {
   const r = await fetch('/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, ...(threadId ? { thread_id: threadId } : {}) }),
     signal,
   });
   if (!r.ok || !r.body) throw new Error(`ask failed: ${r.status}`);
@@ -124,5 +124,27 @@ export async function deleteHistoryItem(id: number): Promise<void> {
 
 export async function clearHistory(): Promise<void> {
   const r = await fetch('/api/history', { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function fetchInvestigations(): Promise<{ investigations: InvestigationSummary[] }> {
+  const r = await fetch('/api/investigations');
+  if (!r.ok) throw new Error('investigations failed');
+  return r.json();
+}
+
+export async function fetchInvestigation(id: string): Promise<InvestigationDetail> {
+  const r = await fetch(`/api/investigations/${id}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function deleteInvestigation(id: string): Promise<void> {
+  const r = await fetch(`/api/investigations/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function clearInvestigations(): Promise<void> {
+  const r = await fetch('/api/investigations', { method: 'DELETE' });
   if (!r.ok) throw new Error(await r.text());
 }

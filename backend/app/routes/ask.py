@@ -14,6 +14,7 @@ router = APIRouter()
 
 class AskBody(BaseModel):
     question: str
+    thread_id: str | None = None
 
 
 def _sse(event: dict) -> str:
@@ -29,7 +30,7 @@ def ask(body: AskBody):
         raise HTTPException(status_code=400, detail="question too long")
     ctx.store.record_question(question, ctx.settings.repo_path)
     return StreamingResponse(
-        (_sse(e) for e in _ask_event_stream(question)),
+        (_sse(e) for e in _ask_event_stream(question, body.thread_id)),
         media_type="text/event-stream",
     )
 
