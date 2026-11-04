@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from .. import evidence as ev
 from .. import context as ctx
+from ..actions import sanitize_suggested_question
 from ..gittools import GitError, GitRepo
 from ..llm_service import ModelService, fallback_investigate
 from ..verify import verify_answer
@@ -15,16 +16,47 @@ from ..verify import verify_answer
 log = logging.getLogger("donk")
 
 
+# Files actually analyzed for cards/graphs. The investigated list is already
+# ranked by mention count, so the cap keeps the most-investigated files.
+_ENRICH_MAX_FILES = 8
+
+
+def _derive_scope(files: list[str]) -> str:
+    """Scope from analyzed files: the file itself, or their common directory."""
+    if not files:
+        return ""
+    if len(files) == 1:
+        return files[0]
+    common: list[str] = []
+    for parts in zip(*(f.split("/") for f in files)):
+        if len(set(parts)) == 1:
+            common.append(parts[0])
+        else:
+            break
+    return "/".join(common)
+
+
 def _enrich_answer(repo: GitRepo, answer: dict) -> dict:
-    """Attach full contributor cards (files/commits/dates) for named contributors."""
+    """Attach full contributor cards (files/commits/dates) for named contributors.
+
+    Cards always describe the files actually investigated — never a re-derived
+    repository-wide rollup, and never strangers the answer didn't name.
+    """
     names = answer.get("contributor_names", [])[:4]
     scope = answer.get("scope", "")
     rollup = answer.get("rollup")
     if rollup is None and names:
-        try:
-            rollup = ev.explain_authorship(repo, scope or "")
-        except GitError:
-            rollup = None
+        investigated = [f for f in answer.get("investigated_files", []) if f]
+        if investigated:
+            analyzed = investigated[:_ENRICH_MAX_FILES]
+            scope = _derive_scope(analyzed)
+            try:
+                rollup = ev.rollup_files(
+                    repo, analyzed, scope=scope,
+                    truncated=len(investigated) > _ENRICH_MAX_FILES,
+                )
+            except GitError:
+                rollup = None
     cards: list[dict] = []
     if rollup and not rollup.get("insufficient"):
         by_name = {c["name"]: c for c in rollup["contributors"]}
@@ -32,8 +64,6 @@ def _enrich_answer(repo: GitRepo, answer: dict) -> dict:
             c = by_name.get(n)
             if c:
                 cards.append(c)
-        if not cards:
-            cards = rollup["contributors"][:3]
         mains = set(rollup.get("main_contributors", []))
         for c in cards:
             c["is_main"] = c["name"] in mains
@@ -47,6 +77,12 @@ def _enrich_answer(repo: GitRepo, answer: dict) -> dict:
         answer["files_truncated"] = rollup.get("files_truncated", False)
         answer["original_author"] = rollup.get("original_author")
         answer["most_recent_contributor"] = rollup.get("most_recent_contributor")
+    # The prompt card pre-fills from suggested_question: never let model
+    # chatter addressed to the user ("do you also want...") leak into it.
+    top_file = (answer.get("files") or [{}])[0].get("path", "")
+    answer["suggested_question"] = sanitize_suggested_question(
+        answer.get("suggested_question", ""), scope or top_file
+    )
     return answer
 
 

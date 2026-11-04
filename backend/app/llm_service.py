@@ -25,6 +25,7 @@ Rules:
 - If evidence is ambiguous, name multiple contributors and explain why.
 - If evidence is insufficient, say so plainly and suggest what would resolve it.
 - Keep the final answer short: a one-sentence headline plus up to three findings.
+- "suggested_question" is a ready-to-send question FOR the contributor about their code (e.g. "Could you walk me through ...?"). Never address the user, never offer follow-ups ("do you want...", "would you like...", "should I..."), never narrate the investigation.
 - Your final message must be a single JSON object: {"headline": str, "findings": [str,...], "contributor_names": [str,...], "evidence_ids": [str,...], "suggested_question": str}.
 """
 
@@ -209,6 +210,7 @@ class ModelService:
         ]
         tool_log: list[dict] = []
         known_ids: set[str] = set()
+        file_mentions: dict[str, int] = {}
         final_text = ""
         for it in range(self.settings.model_max_tool_iters):
             data = self._post(
@@ -236,6 +238,8 @@ class ModelService:
                     result = {"error": str(e)[:300]}
                     err = str(e)[:300]
                 collect_ids(result, known_ids)
+                for p in tool_file_paths(name, call["arguments"], result):
+                    file_mentions[p] = file_mentions.get(p, 0) + 1
                 tool_log.append({
                     "name": name,
                     "arguments": call["arguments"],
@@ -253,6 +257,7 @@ class ModelService:
                 convo.extend(tool_result_inputs(call, result))
         answer = parse_final_json(final_text)
         answer["model_used"] = True
+        answer["investigated_files"] = ev.rank_investigated_files(repo, file_mentions)
         return {"answer": answer, "tool_log": tool_log, "known_ids": sorted(known_ids)}
 
 
@@ -282,6 +287,32 @@ def summarize_args(name: str, args: dict) -> str:
     if name == "explain_authorship":
         return f"authorship {args.get('path_or_prefix', '')}"
     return name
+
+
+def tool_file_paths(name: str, args: dict, result: dict) -> list[str]:
+    """File paths a tool call actually touched (for scope preservation)."""
+    if not isinstance(result, dict) or "error" in result:
+        return []
+    if not isinstance(args, dict):
+        args = {}
+    if name == "search_files":
+        return [
+            h["path"] for h in result.get("hits", [])
+            if isinstance(h, dict) and h.get("path")
+        ]
+    if name == "read_snippet":
+        return [result["path"]] if result.get("path") else []
+    if name == "git_log":
+        return [args["path"]] if args.get("path") else []
+    if name == "explain_authorship":
+        paths = [
+            f["path"] for f in result.get("files", [])
+            if isinstance(f, dict) and f.get("path")
+        ]
+        if args.get("path_or_prefix"):
+            paths.append(args["path_or_prefix"])
+        return paths
+    return []
 
 
 def collect_ids(obj: Any, into: set[str]) -> None:
@@ -411,9 +442,7 @@ def fallback_investigate(
     # Scope: prefer files whose PATH matches a keyword (e.g. "auth" ->
     # apps/server/src/auth/*), then code files, then anything. This keeps
     # "who worked on X" scoped to X's implementation instead of chatty docs.
-    CODE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java",
-                 ".rb", ".php", ".c", ".h", ".cpp", ".cs", ".swift", ".kt",
-                 ".vue", ".svelte")
+    CODE_EXTS = GitRepo.CODE_EXTENSIONS
     pool = [h for h in hits if any(k in h["path"].lower() for k in keywords)]
     if not pool:
         pool = [h for h in hits if h["path"].lower().endswith(CODE_EXTS)]

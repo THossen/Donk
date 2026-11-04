@@ -1,5 +1,5 @@
 import { BadgeCheck, BadgeAlert, FileText, GitCommitHorizontal, Mail } from 'lucide-react';
-import type { Answer } from '../../api/types';
+import type { Answer, Contributor } from '../../api/types';
 import { colorFor, initials, textOnColor } from '../../utils/colors';
 import { shortEvidence } from '../../utils/evidence';
 import { timeAgo } from '../../utils/time';
@@ -23,7 +23,7 @@ export default function Results({
     <div className="space-y-4">
       <Card>
         <div className="flex items-start justify-between gap-3">
-          <h2 className="text-xl font-semibold leading-snug tracking-tight text-slate-50">{answer.headline}</h2>
+          <h2 className="text-xl font-semibold leading-snug tracking-tight text-slate-900">{answer.headline}</h2>
           <Pill
             tone={verified ? 'teal' : 'amber'}
             size="md"
@@ -77,7 +77,7 @@ export default function Results({
           <div className="mt-2 flex flex-wrap gap-2">
             {answer.contributor_names.map((n) => (
               <Button key={n} variant="accent" size="sm" onClick={() => onAsk(n)} className="flex items-center gap-1.5">
-                <Mail size={13} /> Ask {n}
+                <Mail size={13} /> Contact {n}
               </Button>
             ))}
           </div>
@@ -96,19 +96,26 @@ export default function Results({
                   {initials(c.name)}
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate font-semibold text-slate-50">{c.name}</div>
-                  <div className="text-xs text-slate-400">
-                    {c.is_main ? 'Main contributor' : 'Also contributed'}
-                    {answer.original_author === c.name && ' · wrote it first'}
-                    {answer.most_recent_contributor === c.name && ' · last touched'}
-                  </div>
+                  <div className="truncate font-semibold text-slate-900">{c.name}</div>
                 </div>
                 <Button variant="accent" size="sm" onClick={() => onAsk(c.name)} className="ml-auto flex shrink-0 items-center gap-1.5">
-                  <Mail size={13} /> Ask
+                  <Mail size={13} /> Contact
                 </Button>
               </div>
+              <p className="mt-2 text-[13px] leading-relaxed text-slate-300">{relevanceLine(c, answer)}</p>
+              {c.files.length > 0 && (
+                <div className="mt-1.5 truncate font-mono text-xs text-slate-400" title={c.files.join('\n')}>
+                  {c.files.slice(0, 3).join(', ')}
+                  {c.files.length > 3 && ` +${c.files.length - 3} more`}
+                </div>
+              )}
+              <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
+                <Stat label="surviving lines" value={String(c.surviving_lines)} />
+                <Stat label="commits" value={String(c.commits)} />
+                <Stat label="last active" value={c.last_date ? timeAgo(c.last_date) : '—'} title={c.last_date ?? undefined} />
+              </dl>
               <div
-                className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink-800"
+                className="mt-2 h-1 overflow-hidden rounded-full bg-ink-800"
                 title={`${c.surviving_lines.toLocaleString()} surviving lines`}
                 role="img"
                 aria-label={`${c.name}: ${c.surviving_lines.toLocaleString()} surviving lines`}
@@ -118,23 +125,29 @@ export default function Results({
                   style={{ width: `${Math.max(4, (c.surviving_lines / maxLines) * 100)}%`, backgroundColor: colorFor(c.name) }}
                 />
               </div>
-              <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <Stat label="surviving lines" value={String(c.surviving_lines)} />
-                <Stat label="commits" value={String(c.commits)} />
-                <Stat label="last active" value={c.last_date ? timeAgo(c.last_date) : '—'} title={c.last_date ?? undefined} />
-              </dl>
-              {c.files.length > 0 && (
-                <div className="mt-2 truncate font-mono text-xs text-slate-400" title={c.files.join('\n')}>
-                  {c.files.slice(0, 3).join(', ')}
-                  {c.files.length > 3 && ` +${c.files.length - 3} more`}
-                </div>
-              )}
             </div>
           ))}
         </div>
       )}
     </div>
   );
+}
+
+/** Why this person matters for the question, ahead of the raw numbers. */
+function relevanceLine(c: Contributor, answer: Answer): string {
+  const roles: string[] = [];
+  if (c.is_main) roles.push('Main contributor');
+  if (answer.original_author === c.name) roles.push('wrote it first');
+  if (answer.most_recent_contributor === c.name) roles.push('touched it last');
+  if (roles.length === 0) roles.push('Contributor');
+  const parts = [roles.join(' · ')];
+  if (c.files.length > 0) {
+    const base = c.files[0].split('/').pop() ?? c.files[0];
+    parts.push(c.files.length > 1 ? `${base} +${c.files.length - 1} more` : base);
+  }
+  if (c.last_date) parts.push(`last active ${timeAgo(c.last_date)}`);
+  if (c.commits > 0) parts.push(`${c.commits} commit${c.commits === 1 ? '' : 's'} in scope`);
+  return parts.join(' · ');
 }
 
 function RoleSmall({ label, name }: { label: string; name?: string | null }) {

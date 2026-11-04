@@ -5,13 +5,13 @@ import { filesFromEvents } from './utils/evidence';
 import { repoName } from './utils/repo';
 import Timeline from './components/dashboard/Timeline';
 import Results from './components/dashboard/Results';
-import Graph from './components/dashboard/Graph';
 import EmailCard from './components/dashboard/EmailCard';
 import AskBox from './components/dashboard/AskBox';
 import EmailPrompt from './components/dashboard/EmailPrompt';
 import History from './components/dashboard/History';
 import AnswerSkeleton from './components/dashboard/AnswerSkeleton';
-import OverviewCard from './components/dashboard/OverviewCard';
+import RepoStrip from './components/dashboard/RepoStrip';
+import ExploreTabs from './components/dashboard/ExploreTabs';
 import Inspector from './components/evidence/Inspector';
 import Activity from './components/activity/Activity';
 import Sidebar from './components/layout/Sidebar';
@@ -35,6 +35,8 @@ export default function App() {
   const [liveFiles, setLiveFiles] = useState<string[]>([]);
   const [inspectId, setInspectId] = useState<string | null>(null);
   const [inspectData, setInspectData] = useState<Record<string, unknown> | null>(null);
+  const [inspectClosing, setInspectClosing] = useState(false);
+  const inspectTimer = useRef<number | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [draft, setDraft] = useState<DraftAction | null>(null);
   const [draftFor, setDraftFor] = useState<string | null>(null);
@@ -44,8 +46,10 @@ export default function App() {
   const [activityKey, setActivityKey] = useState(0);
   const [historyKey, setHistoryKey] = useState(0);
   const [page, setPage] = useState<Page>('dashboard');
+  const [stopped, setStopped] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const draftBoxRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   function refreshRepoContext() {
     fetchStatus().then(setStatus).catch((e) => setStatusError(e instanceof Error ? e.message : 'unreachable'));
@@ -76,30 +80,14 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Open the email prompt for the main contributor as soon as an answer names someone,
-  // so the box is visible without discovering the per-card Ask button first.
-  useEffect(() => {
-    if (!answer) return;
-    const cards = answer.contributors ?? [];
-    const main = cards.find((c) => c.is_main)?.name ?? cards[0]?.name ?? answer.contributor_names[0];
-    if (main) {
-      setDraftFor(main);
-      setDraftQuestion(answer.suggested_question ?? '');
-    }
-  }, [answer]);
-
-  // Bring the prompt box into view whenever it opens for someone new.
-  useEffect(() => {
-    if (!draftFor) return;
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    draftBoxRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'nearest' });
-  }, [draftFor]);
-
   async function runAsk(q: string) {
     const query = q.trim();
     if (!query || asking) return;
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     setAsking(true);
     setAskError(null);
+    setStopped(false);
     setAnswer(null);
     setEvents([]);
     setLiveFiles([]);
@@ -107,7 +95,7 @@ export default function App() {
     setDraftFor(null);
     const collected: AskEvent[] = [];
     try {
-      for await (const e of askDonk(query)) {
+      for await (const e of askDonk(query, ctrl.signal)) {
         if (e.type === 'answer') setAnswer(e.answer);
         else if (e.type === 'error') setAskError(e.detail);
         else if (e.type !== 'done') {
@@ -117,14 +105,43 @@ export default function App() {
         }
       }
     } catch (e) {
-      setAskError(e instanceof Error ? e.message : 'request failed');
+      if (ctrl.signal.aborted) {
+        setStopped(true);
+      } else {
+        setAskError(e instanceof Error ? e.message : 'request failed');
+      }
     } finally {
       setAsking(false);
       setHistoryKey((k) => k + 1);
     }
   }
 
+  function stopAsk() {
+    abortRef.current?.abort();
+  }
+
+  // Composer suggestions follow the actual repo: top directories first,
+  // neutral fallbacks while the overview is still loading.
+  const suggestions = (() => {
+    const out: string[] = [];
+    for (const [d] of overview?.top_dirs ?? []) {
+      if (out.length >= 3) break;
+      out.push(`Who worked on ${d}?`);
+    }
+    for (const f of ['Who wrote the tests?', 'Who are the main contributors?']) {
+      if (out.length >= 3) break;
+      out.push(f);
+    }
+    return out;
+  })();
+
   async function openEvidence(id: string) {
+    // Opening during a close cancels the pending unmount.
+    if (inspectTimer.current !== null) {
+      clearTimeout(inspectTimer.current);
+      inspectTimer.current = null;
+    }
+    setInspectClosing(false);
     try {
       const data = await fetchEvidence(id);
       setInspectId(id);
@@ -132,6 +149,18 @@ export default function App() {
     } catch (e) {
       setAskError(e instanceof Error ? e.message : 'evidence failed');
     }
+  }
+
+  function closeInspector() {
+    if (inspectClosing) return;
+    setInspectClosing(true);
+    // Unmount after the slide-out finishes so the exit animates.
+    inspectTimer.current = window.setTimeout(() => {
+      setInspectId(null);
+      setInspectData(null);
+      setInspectClosing(false);
+      inspectTimer.current = null;
+    }, 200);
   }
 
   async function resumeDraft(id: string) {
@@ -179,6 +208,11 @@ export default function App() {
               title="Dashboard"
               description="Ask who wrote, changed, or knows any part of this codebase."
             />
+            {overview && (
+              <div className="mt-4">
+                <RepoStrip overview={overview} status={status} onRepoClick={() => setPage('repos')} />
+              </div>
+            )}
             <div className="mt-4">
               <AskBox
                 question={question}
@@ -187,6 +221,8 @@ export default function App() {
                 status={status}
                 inputRef={inputRef}
                 onAsk={runAsk}
+                onStop={stopAsk}
+                suggestions={suggestions}
                 repoLabel={repoName(status?.repo.path)}
                 onRepoClick={() => setPage('repos')}
                 onOpenPalette={() => setPaletteOpen(true)}
@@ -198,28 +234,18 @@ export default function App() {
                 <EmailCard key={draft.id} draft={draft} onDone={() => setActivityKey((k) => k + 1)} onCancel={() => setDraft(null)} />
               </div>
             )}
-            <History refreshKey={historyKey} onRerun={(q) => { setQuestion(q); runAsk(q); }} />
-            {overview && (
-              <div className="mt-4">
-                <OverviewCard
-                  overview={overview}
-                  status={status}
-                  repoMap={repoMap}
-                  mapError={mapError}
-                  scope={answer?.scope ?? null}
-                  liveFiles={liveFiles}
-                  onEvidence={openEvidence}
-                />
-              </div>
-            )}
-
         {askError && (
           <div className="mt-4 rounded-lg border border-red-900 bg-red-950 p-4 text-sm text-red-200">{askError}</div>
         )}
 
         {(events.length > 0 || asking) && (
           <div className="mt-4">
-            <Timeline events={events} live={asking} />
+            <Timeline
+              events={events}
+              status={asking ? 'live' : askError ? 'failed' : answer ? 'complete' : 'partial'}
+              stopped={stopped}
+              onRetry={() => runAsk(question)}
+            />
           </div>
         )}
 
@@ -245,10 +271,24 @@ export default function App() {
             {draft && (
               <EmailCard key={draft.id} draft={draft} onDone={() => setActivityKey((k) => k + 1)} onCancel={() => setDraft(null)} />
             )}
-
-            <Graph answer={answer} liveFiles={liveFiles} onEvidence={openEvidence} />
           </div>
         )}
+
+            {overview && (
+              <div className="mt-4">
+                <ExploreTabs
+                  overview={overview}
+                  status={status}
+                  repoMap={repoMap}
+                  mapError={mapError}
+                  scope={answer?.scope ?? null}
+                  liveFiles={liveFiles}
+                  answer={answer}
+                  onEvidence={openEvidence}
+                />
+              </div>
+            )}
+            <History refreshKey={historyKey} onRerun={(q) => { setQuestion(q); runAsk(q); }} />
 
           </>
         ) : page === 'activity' ? (
@@ -282,7 +322,7 @@ export default function App() {
         </footer>
       </main>
 
-      {inspectId && <Inspector evidence={inspectData} onClose={() => { setInspectId(null); setInspectData(null); }} />}
+      {inspectId && <Inspector evidence={inspectData} closing={inspectClosing} onClose={closeInspector} />}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

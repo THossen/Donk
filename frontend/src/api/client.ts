@@ -12,11 +12,12 @@ export async function fetchOverview(): Promise<Overview> {
   return r.json();
 }
 
-export async function* askDonk(question: string): AsyncGenerator<AskEvent> {
+export async function* askDonk(question: string, signal?: AbortSignal): AsyncGenerator<AskEvent> {
   const r = await fetch('/api/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question }),
+    signal,
   });
   if (!r.ok || !r.body) throw new Error(`ask failed: ${r.status}`);
   const reader = r.body.getReader();

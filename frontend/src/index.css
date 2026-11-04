@@ -28,30 +28,9 @@ button {
   color: #134e4a;
 }
 
-/* Keep secondary text readable on the light surfaces. */
-.text-slate-100,
-.text-slate-200,
-.text-slate-300,
-.text-slate-400,
-.text-slate-500,
-.text-slate-600 {
-  color: #334155 !important;
-}
-
-.text-slate-50,
-.text-slate-900 {
-  color: #172033 !important;
-}
-
-.text-teal-100,
-.text-teal-200 {
-  color: #0f766e !important;
-}
-
-.text-teal-300 {
-  color: #0d9488 !important;
-}
-
+/* Text hierarchy comes from tailwind.config.js — do not flatten it here:
+   slate-900/100 primary (#172033), slate-200/300 secondary (#263449/#3e4d63),
+   slate-400/500/600 muted (#64748b/#475569), teal accents (#0f766e/#0d9488). */
 .placeholder\:text-slate-500::placeholder {
   color: #64748b !important;
   opacity: 1;
@@ -76,6 +55,23 @@ button {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Evidence panel: slide in from the right on open, out on close.
+   The global reduced-motion rule collapses these to instant. */
+.donk-panel-in {
+  animation: donk-slide-in 240ms ease-out;
+}
+.donk-panel-out {
+  animation: donk-slide-out 180ms ease-in forwards;
+}
+@keyframes donk-slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes donk-slide-out {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(100%); opacity: 0.6; }
 }
 
 .donk-scroll::-webkit-scrollbar {

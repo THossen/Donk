@@ -30,7 +30,7 @@ export default function EmailPrompt({
           onChange={(e) => onDraftQuestionChange(e.target.value)}
           rows={3}
           placeholder="What do you want to ask?"
-          className="mt-2 w-full rounded-md border border-ink-700 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-teal-700"
+          className="mt-2 w-full rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-teal-700"
         />
         {draftError && <div className="mt-2 text-sm text-red-300">{draftError}</div>}
         <div className="mt-2 flex flex-wrap gap-2">

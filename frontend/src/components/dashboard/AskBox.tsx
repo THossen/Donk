@@ -1,13 +1,7 @@
 import { useEffect, type RefObject } from 'react';
-import { ArrowUp, FolderGit2, KeyRound, Loader2 } from 'lucide-react';
+import { ArrowUp, FolderGit2, KeyRound, Square } from 'lucide-react';
 import type { Status } from '../../api/types';
 import Card from '../ui/Card';
-
-const SUGGESTIONS = [
-  'Who worked on auth?',
-  'Who changed the server pairing code?',
-  'Who wrote the provider integrations?',
-];
 
 export default function AskBox({
   question,
@@ -16,9 +10,11 @@ export default function AskBox({
   status,
   inputRef,
   onAsk,
+  onStop,
   repoLabel,
   onRepoClick,
   onOpenPalette,
+  suggestions,
 }: {
   question: string;
   onQuestionChange: (q: string) => void;
@@ -26,9 +22,11 @@ export default function AskBox({
   status: Status | null;
   inputRef: RefObject<HTMLTextAreaElement>;
   onAsk: (q: string) => void;
+  onStop: () => void;
   repoLabel: string;
   onRepoClick: () => void;
   onOpenPalette: () => void;
+  suggestions: string[];
 }) {
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
@@ -83,19 +81,30 @@ export default function AskBox({
                 {isMac ? '⌘K' : 'Ctrl K'}
               </kbd>
             </button>
-            <button
-              onClick={submit}
-              disabled={asking || !question.trim()}
-              aria-label="Ask Donk"
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-teal-700 text-white shadow-sm hover:bg-[#0a5a53] disabled:opacity-50"
-            >
-              {asking ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
-            </button>
+            {asking ? (
+              <button
+                onClick={onStop}
+                aria-label="Stop investigation"
+                title="Stop investigation"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-red-200 text-white shadow-sm hover:bg-[#991b1b]"
+              >
+                <Square size={14} />
+              </button>
+            ) : (
+              <button
+                onClick={submit}
+                disabled={!question.trim()}
+                aria-label="Ask Donk"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-teal-700 text-white shadow-sm hover:bg-[#0a5a53] disabled:opacity-50"
+              >
+                <ArrowUp size={16} />
+              </button>
+            )}
           </div>
         </div>
       </Card>
       <div className="mt-2 flex flex-wrap gap-2">
-        {SUGGESTIONS.map((s) => (
+        {suggestions.map((s) => (
           <button
             key={s}
             onClick={() => {

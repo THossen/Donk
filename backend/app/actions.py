@@ -70,6 +70,40 @@ def resolve_delivery(settings: Settings, contributor: str) -> tuple[str, str]:
     return roster_email, roster_email
 
 
+def suggest_question_text(scope: str) -> str:
+    """Contributor-ready default question when the model gives us nothing usable."""
+    scope_txt = scope or "the code"
+    return (
+        f"Could you walk me through {scope_txt} — how it works today,"
+        " the trickiest edge cases, and what I should know before changing it?"
+    )
+
+
+# Model chatter addressed to the user ("do you also want...") instead of a
+# question for the contributor. Matched as prefixes; legitimate contributor
+# questions ("do you remember why...") don't start this way.
+_META_QUESTION_PREFIXES = (
+    "do you want",
+    "do you also want",
+    "do you need",
+    "would you like",
+    "would you prefer",
+    "should i",
+    "shall i",
+    "want me to",
+    "let me know",
+    "anything else",
+)
+
+
+def sanitize_suggested_question(text: str, scope: str) -> str:
+    """Drop AI-chat leakage; always return a contributor-ready question."""
+    clean = (text or "").strip()
+    if not clean or clean.lower().startswith(_META_QUESTION_PREFIXES):
+        return suggest_question_text(scope)
+    return clean
+
+
 def build_template_draft(contributor: str, question: str, scope: str) -> tuple[str, str]:
     scope_txt = scope or "the code"
     subject = f"[Donk] Question about {scope_txt}"

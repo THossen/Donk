@@ -46,11 +46,8 @@ def propose_email(body: ProposeBody):
                     grounds.append(f"{r['sha'][:12]} {r['subject']}")
             except GitError:
                 continue
-        scope_txt = body.scope or (grounds[0] if grounds else "the code")
-        question = (
-            f"Could you walk me through {scope_txt} â€” how it works today,"
-            " the trickiest edge cases, and what I should know before changing it?"
-        )
+        scope_txt = body.scope or (grounds[0] if grounds else "")
+        question = email_actions.suggest_question_text(scope_txt)
     model_draft = None
     if ctx.settings.model_configured:
         try:

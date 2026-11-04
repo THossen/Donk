@@ -24,6 +24,8 @@ export interface Contributor {
   first_date: string | null;
   last_date: string | null;
   files: string[];
+  /** Surviving blamed lines per file, for edge weighting. */
+  file_lines?: Record<string, number>;
   is_main?: boolean;
 }
 
@@ -41,6 +43,7 @@ export interface Answer {
   original_author?: string | null;
   most_recent_contributor?: string | null;
   scope?: string;
+  investigated_files?: string[];
   verification?: { checked: number; problems: string[]; verified: boolean };
   repaired?: boolean;
 }

@@ -120,6 +120,12 @@ class GitRepo:
     # Vendored/mirror paths excluded from content search (noise filtering).
     SEARCH_EXCLUDED_PREFIXES = (".repos/", "node_modules/")
 
+    # Recognized code extensions: implementations sort before docs/config
+    # when a bounded file set must choose which files to analyze.
+    CODE_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java",
+                       ".rb", ".php", ".c", ".h", ".cpp", ".cs", ".swift", ".kt",
+                       ".vue", ".svelte")
+
     def search(self, query: str, path_prefix: str = "", max_results: int = 20) -> list[dict]:
         """Fixed-string, case-insensitive content search via git grep. Bounded."""
         if not query or not query.strip():

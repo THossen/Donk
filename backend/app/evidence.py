@@ -88,6 +88,53 @@ def resolve(repo: GitRepo, evidence_id: str) -> dict:
     raise GitError(f"unknown evidence kind: {kind!r}")
 
 
+# Lockfiles and generated bundles: thousands of blame lines that say nothing
+# about who wrote the code. Excluded from authorship analysis entirely.
+_GENERATED_NAMES = frozenset({
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock",
+    "gemfile.lock", "poetry.lock", "composer.lock", "go.sum",
+})
+_GENERATED_SUFFIXES = (".min.js", ".min.css", ".bundle.js", ".bundle.css",
+                       ".js.map", ".css.map")
+
+
+def _is_generated_noise(path: str) -> bool:
+    base = path.rsplit("/", 1)[-1].lower()
+    return base in _GENERATED_NAMES or base.endswith(_GENERATED_SUFFIXES)
+
+
+def _file_tier(path: str) -> tuple[int, str]:
+    """Code sorts before docs/config; alphabetical within a tier (deterministic)."""
+    tier = 0 if path.lower().endswith(GitRepo.CODE_EXTENSIONS) else 1
+    return (tier, path)
+
+
+def rank_investigated_files(
+    repo: GitRepo, mentions: dict[str, int], per_dir: int = 6
+) -> list[str]:
+    """Rank actually-investigated paths into a deterministic file list.
+
+    Exact tracked files pass through; directory scopes expand to their
+    code-first files; unknown paths are dropped. Ordered by mention count
+    so the most-investigated files survive downstream caps.
+    """
+    tracked = set(repo.all_files())
+    counts: dict[str, int] = {}
+    for path, n in mentions.items():
+        if not path:
+            continue
+        if path in tracked:
+            counts[path] = counts.get(path, 0) + n
+            continue
+        sub = sorted(
+            (f for f in tracked if f.startswith(path.rstrip("/") + "/")),
+            key=_file_tier,
+        )
+        for f in sub[:per_dir]:
+            counts[f] = counts.get(f, 0) + n
+    return sorted(counts, key=lambda f: (-counts[f], f))
+
+
 def explain_authorship(
     repo: GitRepo,
     path_or_prefix: str,
@@ -101,9 +148,24 @@ def explain_authorship(
     (latest commits), and substantial surviving contributions (blame lines).
     """
     prefix = repo.check_path(path_or_prefix) if path_or_prefix else ""
-    files = repo.ls_files(prefix, max_results=max_files + 1)
-    truncated_files = len(files) > max_files
-    files = files[:max_files]
+    # Candidate set: everything under the scope (cached listing), minus
+    # vendored mirrors and generated noise — a lockfile's 10k lines would
+    # otherwise crown whoever ran `npm install` the main contributor.
+    if prefix and prefix != ".":
+        candidates = [
+            f for f in repo.all_files()
+            if f == prefix or f.startswith(prefix + "/")
+        ]
+    else:
+        candidates = list(repo.all_files())
+    candidates = [
+        f for f in candidates
+        if not f.startswith(GitRepo.SEARCH_EXCLUDED_PREFIXES)
+        and not _is_generated_noise(f)
+    ]
+    candidates.sort(key=_file_tier)
+    truncated_files = len(candidates) > max_files
+    files = candidates[:max_files]
     if not files:
         return {
             "scope": path_or_prefix,
@@ -112,7 +174,30 @@ def explain_authorship(
             "insufficient": True,
             "reason": f"no tracked files under {path_or_prefix!r}",
         }
+    return rollup_files(
+        repo, files,
+        scope=path_or_prefix,
+        truncated=truncated_files,
+        max_files=max_files,
+        log_per_file=log_per_file,
+        blame_lines_per_file=blame_lines_per_file,
+    )
 
+
+def rollup_files(
+    repo: GitRepo,
+    files: list[str],
+    scope: str = "",
+    truncated: bool = False,
+    max_files: int = 8,
+    log_per_file: int = 12,
+    blame_lines_per_file: int = 2000,
+) -> dict:
+    """Authorship rollup over an explicit file list.
+
+    Used when the caller already knows exactly which files were investigated,
+    so cards and graphs describe those files instead of a re-derived scope.
+    """
     per_author: dict[str, dict] = {}
     file_infos: list[dict] = []
 
@@ -127,6 +212,7 @@ def explain_authorship(
                 "first_date": None,
                 "last_date": None,
                 "files": [],
+                "file_lines": {},
             },
         )
 
@@ -138,6 +224,7 @@ def explain_authorship(
         for author, count in blame["rollup"].items():
             a = touch(author)
             a["surviving_lines"] += count
+            a["file_lines"][f] = a["file_lines"].get(f, 0) + count
             if f not in a["files"]:
                 a["files"].append(f)
         try:
@@ -178,7 +265,10 @@ def explain_authorship(
         key=lambda a: (-a["surviving_lines"], -a["commits"], a["name"]),
     )
     for c in contributors:
-        c["files"] = sorted(c["files"])[:max_files]
+        # Most-touched files first: the graph and cards slice from the front,
+        # so alphabetical order used to surface .gitignore over real code.
+        lines = c["file_lines"]
+        c["files"] = sorted(c["files"], key=lambda f: (-lines.get(f, 0), f))[:max_files]
 
     # Main contributors: top by surviving lines, plus anyone within a
     # substantial share (>=25% of the top). Ambiguity is shown, not hidden.
@@ -203,9 +293,9 @@ def explain_authorship(
         recent = max(recent_dated, key=lambda c: c["last_date"])["name"]
 
     return {
-        "scope": path_or_prefix,
+        "scope": scope,
         "files": file_infos,
-        "files_truncated": truncated_files,
+        "files_truncated": truncated,
         "contributors": contributors,
         "main_contributors": mains,
         "original_author": original,

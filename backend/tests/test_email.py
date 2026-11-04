@@ -100,6 +100,31 @@ def test_discard_rejects_sent_and_unknown(tmp_path):
     assert e.value.status_code == 404
 
 
+def test_sanitize_suggested_question_drops_meta_chatter():
+    for meta in (
+        "Do you also want to know about the backend endpoint?",
+        "Would you like me to check the tests too?",
+        "Should I look at server/pg-server.js next?",
+        "Want me to dig deeper?",
+        "Let me know if you want more detail.",
+        "",
+        "   ",
+    ):
+        out = email_actions.sanitize_suggested_question(meta, "auth/login.py")
+        assert out.startswith("Could you walk me through auth/login.py"), meta
+    # Genuine contributor-directed questions pass through untouched.
+    for good in (
+        "Could you walk me through the login flow?",
+        "Do you remember why the retry was added?",
+        "How do the edge cases around logout work?",
+    ):
+        assert email_actions.sanitize_suggested_question(good, "auth") == good
+
+
+def test_suggest_question_text_defaults_scope():
+    assert "the code" in email_actions.suggest_question_text("")
+
+
 def test_smtp_failure_recorded_not_delivered(tmp_path):
     s = make_settings(tmp_path, EMAIL_MODE="smtp", SMTP_HOST="127.0.0.1", SMTP_PORT=9)
     store = Store(s.db_path)
